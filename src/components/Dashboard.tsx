@@ -143,7 +143,7 @@ export default function Dashboard() {
 
   // 제품명 목록
   const products = useMemo(() => {
-    return Array.from(new Set(currentBrandData.filter(d => d.category === selectedCategory).map(d => d.product_name))).filter(Boolean);
+    return Array.from(new Set(currentBrandData.filter(d => !selectedCategory || d.category === selectedCategory).map(d => d.product_name))).filter(Boolean) as string[];
   }, [currentBrandData, selectedCategory]);
 
   // 모델 코드 목록
@@ -203,23 +203,43 @@ export default function Dashboard() {
 
   // 자동 리셋 로직
   useEffect(() => {
-    if (categories.length > 0 && !categories.includes(selectedCategory)) setSelectedCategory(categories[0]);
+    if (categories.length > 0 && !categories.includes(selectedCategory)) {
+      setSelectedCategory(categories[0]);
+    } else if (categories.length === 0 && selectedCategory !== "") {
+      setSelectedCategory("");
+    }
   }, [categories, selectedCategory]);
 
   useEffect(() => {
-    if (products.length > 0 && !products.includes(selectedProduct)) setSelectedProduct(products[0]);
+    if (products.length > 0 && !products.includes(selectedProduct)) {
+      setSelectedProduct(products[0]);
+    } else if (products.length === 0 && selectedProduct !== "") {
+      setSelectedProduct("");
+    }
   }, [products, selectedProduct]);
 
   useEffect(() => {
-    if (modelCodes.length > 0 && !modelCodes.includes(selectedModelCode)) setSelectedModelCode(modelCodes[0]);
+    if (modelCodes.length > 0 && !modelCodes.includes(selectedModelCode)) {
+      setSelectedModelCode(modelCodes[0]);
+    } else if (modelCodes.length === 0 && selectedModelCode !== "") {
+      setSelectedModelCode("");
+    }
   }, [modelCodes, selectedModelCode]);
 
   useEffect(() => {
-    if (serviceTypes.length > 0 && !serviceTypes.includes(selectedServiceType)) setSelectedServiceType(serviceTypes[0]);
+    if (serviceTypes.length > 0 && !serviceTypes.includes(selectedServiceType)) {
+      setSelectedServiceType(serviceTypes[0]);
+    } else if (serviceTypes.length === 0 && selectedServiceType !== "") {
+      setSelectedServiceType("");
+    }
   }, [serviceTypes, selectedServiceType]);
 
   useEffect(() => {
-    if (contractPeriods.length > 0 && !contractPeriods.includes(selectedContractPeriod)) setSelectedContractPeriod(contractPeriods[0]);
+    if (contractPeriods.length > 0 && !contractPeriods.includes(selectedContractPeriod)) {
+      setSelectedContractPeriod(contractPeriods[0]);
+    } else if (contractPeriods.length === 0 && selectedContractPeriod !== "") {
+      setSelectedContractPeriod("");
+    }
   }, [contractPeriods, selectedContractPeriod]);
 
   // 고객 사은품 공제액 자동 계산 (본사 총수수료의 70%를 만원 단위 절사)
