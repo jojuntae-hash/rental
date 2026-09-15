@@ -584,8 +584,10 @@ export default function Dashboard() {
               <select 
                 value={selectedCategory} 
                 onChange={e => setSelectedCategory(e.target.value)}
-                className="w-full border border-gray-300 rounded p-2 focus:border-blue-500 outline-none"
+                className="w-full border border-gray-300 rounded p-2 focus:border-blue-500 outline-none disabled:bg-gray-100"
+                disabled={categories.length === 0}
               >
+                {categories.length === 0 && <option value="">분류 없음 (전체 표시)</option>}
                 {categories.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
