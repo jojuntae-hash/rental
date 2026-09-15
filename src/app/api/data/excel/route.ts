@@ -3,6 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import * as XLSX from 'xlsx';
 
+export const dynamic = 'force-dynamic';
+
 // 엑셀 컬럼 매핑 기준
 const columnMapping: Record<string, string> = {
   "브랜드": "brand",
