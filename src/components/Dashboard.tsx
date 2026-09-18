@@ -1,9 +1,21 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useRef } from "react";
-import { Search, LogOut, Eye, EyeOff, Upload, Settings } from "lucide-react";
-import { RentalData } from "@/lib/excelParser";
+/* eslint-disable react-hooks/set-state-in-effect -- dependent quote selectors intentionally reset when upstream data changes */
+
+import React, { useState, useEffect, useMemo } from "react";
+import { LogOut, Eye, EyeOff, Settings } from "lucide-react";
 import { parseAndApplyRules } from "@/lib/ruleEngine";
+import {
+  formatPeriod,
+  getOptionConditionLabel,
+  getOptionPeriod,
+  normalizeSearchText,
+  type RentalDataset,
+  type RentalCompany,
+  type RentalMetadata,
+  type RentalOption,
+  type RentalProduct,
+} from "@/lib/rentalData";
 
 export default function Dashboard() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -11,17 +23,19 @@ export default function Dashboard() {
   const [autoLogin, setAutoLogin] = useState(false);
   const [isAuthChecking, setIsAuthChecking] = useState(true);
   
-  const [activeBrand, setActiveBrand] = useState("코웨이");
+  const [activeBrand, setActiveBrand] = useState<RentalCompany>("코웨이");
   const [hideMargin, setHideMargin] = useState(false);
-  const [rentalData, setRentalData] = useState<RentalData[]>([]);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [productsData, setProductsData] = useState<RentalProduct[]>([]);
+  const [optionsData, setOptionsData] = useState<RentalOption[]>([]);
+  const [metadata, setMetadata] = useState<RentalMetadata | null>(null);
   
   // 상태 관리: 필터
   const [selectedCategory, setSelectedCategory] = useState<string>("");
   const [selectedProduct, setSelectedProduct] = useState<string>("");
   const [selectedModelCode, setSelectedModelCode] = useState<string>("");
-  const [selectedServiceType, setSelectedServiceType] = useState<string>("");
-  const [selectedContractPeriod, setSelectedContractPeriod] = useState<string>("");
+  const [selectedPeriod, setSelectedPeriod] = useState<number | null>(null);
+  const [selectedOptionId, setSelectedOptionId] = useState<string>("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [orderType, setOrderType] = useState<string>("신규");
   const [simultaneousCount, setSimultaneousCount] = useState<number>(2);
   const [extraBenefit, setExtraBenefit] = useState<string>("");
@@ -38,20 +52,14 @@ export default function Dashboard() {
   // 마진 설정
   const [giftDeduction, setGiftDeduction] = useState<number>(0);
   
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // 엑셀 모달 상태
-  const [excelModalBrand, setExcelModalBrand] = useState("코웨이");
-  const [uploadedFiles, setUploadedFiles] = useState<Record<string, string>>({});
-
   const fetchInitialData = async () => {
     try {
-      // 엑셀 데이터 패치
       const resData = await fetch('/api/data/excel');
       if (resData.ok) {
-        const { data, files } = await resData.json();
-        setRentalData(data);
-        if (files) setUploadedFiles(files);
+        const dataset = await resData.json() as RentalDataset;
+        setProductsData(dataset.products);
+        setOptionsData(dataset.rentalOptions);
+        setMetadata(dataset.metadata);
       }
       
       // 규칙 데이터 패치
@@ -75,36 +83,6 @@ export default function Dashboard() {
     }
     setIsAuthChecking(false);
   }, []);
-
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("brand", excelModalBrand);
-
-      const res = await fetch('/api/data/excel', {
-        method: 'POST',
-        body: formData
-      });
-
-      if (!res.ok) {
-        const err = await res.json();
-        alert(`업로드 실패: ${err.error}`);
-        return;
-      }
-
-      alert(`${excelModalBrand} 데이터 업로드가 완료되었습니다!`);
-      setIsSettingsOpen(false);
-      // 업로드 완료 후 다시 데이터 패치
-      fetchInitialData();
-    } catch (error) {
-      console.error(error);
-      alert("데이터 업로드 중 오류가 발생했습니다.");
-    }
-  };
 
   const handleSaveRules = async () => {
     try {
@@ -131,52 +109,64 @@ export default function Dashboard() {
     }
   };
 
-  // 현재 브랜드 데이터 필터링
-  const currentBrandData = useMemo(() => {
-    return rentalData.filter(d => d.brand === activeBrand);
-  }, [rentalData, activeBrand]);
+  const currentBrandProducts = useMemo(() => {
+    const query = normalizeSearchText(searchQuery);
+    return productsData.filter((product) => {
+      if (product.company !== activeBrand) return false;
+      if (!query) return true;
+      return [product.company, product.category, product.productName, product.displayName, product.model, product.detailModel]
+        .some((value) => normalizeSearchText(value).includes(query));
+    });
+  }, [productsData, activeBrand, searchQuery]);
 
   // 카테고리 목록
   const categories = useMemo(() => {
-    return Array.from(new Set(currentBrandData.map(d => d.category))).filter(Boolean);
-  }, [currentBrandData]);
+    return Array.from(new Set(currentBrandProducts.map((product) => product.category))).filter(Boolean).sort();
+  }, [currentBrandProducts]);
 
   // 제품명 목록
   const products = useMemo(() => {
-    return Array.from(new Set(currentBrandData.filter(d => !selectedCategory || d.category === selectedCategory).map(d => d.product_name))).filter(Boolean) as string[];
-  }, [currentBrandData, selectedCategory]);
+    return Array.from(new Set(currentBrandProducts
+      .filter((product) => !selectedCategory || product.category === selectedCategory)
+      .map((product) => product.productName))).filter(Boolean).sort();
+  }, [currentBrandProducts, selectedCategory]);
 
   // 모델 코드 목록
   const modelCodes = useMemo(() => {
-    return Array.from(new Set(currentBrandData.filter(d => d.product_name === selectedProduct).map(d => d.model_code))).filter(Boolean);
-  }, [currentBrandData, selectedProduct]);
+    return currentBrandProducts
+      .filter((product) => product.category === selectedCategory && product.productName === selectedProduct)
+      .map((product) => product.model)
+      .filter((model, index, values) => model && values.indexOf(model) === index)
+      .sort();
+  }, [currentBrandProducts, selectedCategory, selectedProduct]);
 
   // 선택된 모델의 데이터
-  const selectedModelDataList = useMemo(() => {
-    return currentBrandData.filter(d => d.model_code === selectedModelCode);
-  }, [currentBrandData, selectedModelCode]);
+  const selectedProductData = useMemo(() => currentBrandProducts.find((product) =>
+    product.category === selectedCategory &&
+    product.productName === selectedProduct &&
+    product.model === selectedModelCode
+  ), [currentBrandProducts, selectedCategory, selectedProduct, selectedModelCode]);
 
-  // 관리방식 목록
-  const serviceTypes = useMemo(() => {
-    return Array.from(new Set(selectedModelDataList.map(d => d.service_type))).filter(Boolean);
-  }, [selectedModelDataList]);
+  const selectedModelOptions = useMemo(() => selectedProductData
+    ? optionsData.filter((option) => option.productId === selectedProductData.productId)
+    : [], [optionsData, selectedProductData]);
 
-  // 약정기간 목록
-  const contractPeriods = useMemo(() => {
-    return Array.from(new Set(selectedModelDataList.filter(d => d.service_type === selectedServiceType).map(d => d.contract_period))).filter(Boolean);
-  }, [selectedModelDataList, selectedServiceType]);
+  const periods = useMemo(() => Array.from(new Set(selectedModelOptions.map(getOptionPeriod)))
+    .filter((period): period is number => period != null)
+    .sort((a, b) => a - b), [selectedModelOptions]);
 
-  // 최종 선택된 단일 데이터
-  const finalData = useMemo(() => {
-    return selectedModelDataList.find(d => d.service_type === selectedServiceType && d.contract_period === selectedContractPeriod);
-  }, [selectedModelDataList, selectedServiceType, selectedContractPeriod]);
+  const periodOptions = useMemo(() => selectedModelOptions.filter((option) => getOptionPeriod(option) === selectedPeriod),
+    [selectedModelOptions, selectedPeriod]);
+
+  const finalData = useMemo(() => periodOptions.find((option) => option.optionId === selectedOptionId),
+    [periodOptions, selectedOptionId]);
 
   // 룰 엔진 연동 계산
   const computedFinalData = useMemo(() => {
     if (!finalData) return null;
     
     let rulesStr = ruleTexts[activeBrand] || "";
-    const baseFee = (Number(finalData.dealer_fee) || 0) + (Number(finalData.bonus_fee) || 0);
+    const baseFee = finalData.totalCommission;
     
     const actualOrderType = orderType === '동시가입' ? `동시가입 ${simultaneousCount}대` : orderType;
     
@@ -186,7 +176,7 @@ export default function Dashboard() {
     
     const { newPrice, newFee, appliedRules, discountPeriod } = parseAndApplyRules(
       rulesStr,
-      finalData.promo_price || finalData.base_price || 0,
+      finalData.monthlyPrice,
       baseFee,
       actualOrderType
     );
@@ -197,9 +187,9 @@ export default function Dashboard() {
       computedFee: newFee,
       appliedRules,
       discountPeriod,
-      half_price_period: orderType === '타사보상' ? '-' : finalData.half_price_period
+      product: selectedProductData,
     };
-  }, [finalData, activeBrand, orderType, simultaneousCount, ruleTexts, extraBenefit]);
+  }, [finalData, selectedProductData, activeBrand, orderType, simultaneousCount, ruleTexts, extraBenefit]);
 
   // 자동 리셋 로직
   useEffect(() => {
@@ -227,20 +217,20 @@ export default function Dashboard() {
   }, [modelCodes, selectedModelCode]);
 
   useEffect(() => {
-    if (serviceTypes.length > 0 && !serviceTypes.includes(selectedServiceType)) {
-      setSelectedServiceType(serviceTypes[0]);
-    } else if (serviceTypes.length === 0 && selectedServiceType !== "") {
-      setSelectedServiceType("");
+    if (periods.length > 0 && (selectedPeriod == null || !periods.includes(selectedPeriod))) {
+      setSelectedPeriod(periods[0]);
+    } else if (periods.length === 0 && selectedPeriod != null) {
+      setSelectedPeriod(null);
     }
-  }, [serviceTypes, selectedServiceType]);
+  }, [periods, selectedPeriod]);
 
   useEffect(() => {
-    if (contractPeriods.length > 0 && !contractPeriods.includes(selectedContractPeriod)) {
-      setSelectedContractPeriod(contractPeriods[0]);
-    } else if (contractPeriods.length === 0 && selectedContractPeriod !== "") {
-      setSelectedContractPeriod("");
+    if (periodOptions.length > 0 && !periodOptions.some((option) => option.optionId === selectedOptionId)) {
+      setSelectedOptionId(periodOptions[0].optionId);
+    } else if (periodOptions.length === 0 && selectedOptionId) {
+      setSelectedOptionId("");
     }
-  }, [contractPeriods, selectedContractPeriod]);
+  }, [periodOptions, selectedOptionId]);
 
   // 고객 사은품 공제액 자동 계산 (본사 총수수료의 70%를 만원 단위 절사)
   useEffect(() => {
@@ -252,17 +242,14 @@ export default function Dashboard() {
     }
   }, [computedFinalData?.computedFee]);
 
-  // 매트릭스 표 데이터 (선택된 모델의 모든 약정/관리방식 조합)
+  // 매트릭스 표 데이터 (선택된 모델의 기간/조건 조합)
   const matrixData = useMemo(() => {
-    const serviceTypeSet = Array.from(new Set(selectedModelDataList.map(d => d.service_type))).filter(Boolean);
-    const contractPeriodSet = Array.from(new Set(selectedModelDataList.map(d => d.contract_period))).filter(Boolean).sort();
-    
     return {
-      rows: serviceTypeSet,
-      cols: contractPeriodSet,
-      data: selectedModelDataList
+      rows: Array.from(new Set(selectedModelOptions.map(getOptionConditionLabel))),
+      cols: periods,
+      data: selectedModelOptions,
     };
-  }, [selectedModelDataList]);
+  }, [selectedModelOptions, periods]);
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -271,7 +258,9 @@ export default function Dashboard() {
 
   const getChatText = () => {
     if (!computedFinalData) return "데이터가 없습니다.";
-    let text = `========================\n[${computedFinalData.brand}] ${computedFinalData.product_name} (${computedFinalData.model_code})\n========================\n▶ 선택조건: ${computedFinalData.contract_period} / ${computedFinalData.service_type}`;
+    const product = computedFinalData.product;
+    if (!product) return "데이터가 없습니다.";
+    let text = `========================\n[${product.company}] ${product.productName} (${product.model})\n========================\n▶ 제품군: ${product.category}\n▶ 선택기간: ${formatPeriod(getOptionPeriod(computedFinalData))}\n▶ 렌탈조건: ${getOptionConditionLabel(computedFinalData)}`;
     
     const actualOrderType = orderType === '동시가입' ? `동시가입 ${simultaneousCount}대` : orderType;
     
@@ -281,9 +270,9 @@ export default function Dashboard() {
 
     if (computedFinalData.discountPeriod) {
       text += `\n▶ 할인가: 월 ${computedFinalData.computedPrice?.toLocaleString()}원 (${computedFinalData.discountPeriod})\n`;
-      text += `▶ ${computedFinalData.discountPeriod} 이후: 월 ${computedFinalData.base_price?.toLocaleString()}원`;
+      text += `▶ ${computedFinalData.discountPeriod} 이후: 월 ${computedFinalData.monthlyPrice.toLocaleString()}원`;
     } else {
-      text += `\n▶ 정상 렌탈료: 월 ${computedFinalData.base_price?.toLocaleString()}원\n▶ 최종 렌탈료: 월 ${computedFinalData.computedPrice?.toLocaleString()}원`;
+      text += `\n▶ 월 렌탈료: ${computedFinalData.computedPrice?.toLocaleString()}원`;
     }
     
     if (computedFinalData.appliedRules && computedFinalData.appliedRules.length > 0) {
@@ -291,8 +280,8 @@ export default function Dashboard() {
     }
     
     text += `\n------------------------\n🎁 실시간 본사 혜택:\n`;
-    if (computedFinalData.half_price_period && computedFinalData.half_price_period !== "-") {
-      text += `- 반값 프로모션 지원: ${computedFinalData.half_price_period}\n`;
+    if (computedFinalData.promotionName) {
+      text += `- ${computedFinalData.promotionName}${computedFinalData.promotionPeriod ? ` (${computedFinalData.promotionPeriod}개월)` : ""}\n`;
     }
     if (extraBenefit) {
       text += `- 추가 지원: 렌탈료 ${extraBenefit}\n`;
@@ -301,8 +290,11 @@ export default function Dashboard() {
     if (giftDeduction > 0) {
       text += `- 상품권 ${giftDeduction / 10000}만원\n`;
     }
-    if (computedFinalData.benefit_notes) {
-      text += computedFinalData.benefit_notes.split(',').map((n:string) => '- ' + n.trim()).join('\n') + '\n';
+    if (computedFinalData.promotionDescription) {
+      text += `- ${computedFinalData.promotionDescription}\n`;
+    }
+    if (computedFinalData.notes) {
+      text += computedFinalData.notes.split(',').map((note: string) => `- ${note.trim()}`).join('\n') + '\n';
     }
     
     text += `========================`;
@@ -378,7 +370,7 @@ export default function Dashboard() {
             {["코웨이", "쿠쿠", "SK매직"].map((brand) => (
               <button
                 key={brand}
-                onClick={() => setActiveBrand(brand)}
+                onClick={() => setActiveBrand(brand as RentalCompany)}
                 className={`px-3 md:px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
                   activeBrand === brand 
                     ? "bg-blue-600 text-white shadow-sm" 
@@ -390,25 +382,16 @@ export default function Dashboard() {
             ))}
           </div>
           
-          {/* 업로드된 파일명 표시 */}
+          {/* 빌드된 통합 데이터 표시 */}
           <div className="hidden md:flex text-sm text-gray-500 bg-gray-50 px-3 py-1.5 rounded border border-gray-200 items-center gap-2 shrink-0">
             <span className="font-medium text-gray-700">현재 데이터:</span>
-            <span className="truncate max-w-[200px]" title={uploadedFiles[activeBrand] || "없음"}>
-              {uploadedFiles[activeBrand] || "없음"}
+            <span className="truncate max-w-[220px]" title={metadata?.sourceFiles[activeBrand]?.fileName || "없음"}>
+              {metadata?.sourceFiles[activeBrand]?.fileName || "불러오는 중"}
             </span>
           </div>
         </div>
 
         <div className="flex items-center space-x-2 md:space-x-4 w-full md:w-auto justify-between md:justify-end overflow-x-auto pb-1 md:pb-0 text-sm md:text-base">
-          <button
-            onClick={() => setIsSettingsOpen(true)}
-            className="flex items-center space-x-1 text-gray-600 hover:text-gray-900 shrink-0"
-          >
-            <Settings size={18} />
-            <span className="hidden md:inline">설정(엑셀)</span>
-            <span className="md:hidden">엑셀</span>
-          </button>
-          <div className="text-gray-300">|</div>
           <button
             onClick={() => {
               setRuleModalBrand(activeBrand);
@@ -438,72 +421,6 @@ export default function Dashboard() {
           </button>
         </div>
       </header>
-
-      {/* 설정 모달 */}
-      {isSettingsOpen && (
-        <div 
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-          onClick={() => setIsSettingsOpen(false)}
-        >
-          <div 
-            className="bg-white p-6 rounded-xl shadow-lg w-96"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 className="text-xl font-bold mb-4">관리자 설정 (엑셀)</h2>
-            
-            <div className="flex border-b border-gray-200 mb-4">
-              {["코웨이", "쿠쿠", "SK매직"].map((brand) => (
-                <button
-                  key={brand}
-                  onClick={() => setExcelModalBrand(brand)}
-                  className={`px-4 py-2 font-medium ${
-                    excelModalBrand === brand
-                      ? "text-blue-600 border-b-2 border-blue-600"
-                      : "text-gray-500 hover:text-gray-700"
-                  }`}
-                >
-                  {brand}
-                </button>
-              ))}
-            </div>
-
-            <div className="mb-4">
-              <label className="block text-gray-700 mb-2 font-medium">{excelModalBrand} 엑셀 업로드</label>
-              
-              {uploadedFiles[excelModalBrand] && (
-                <div className="mb-3 p-3 bg-blue-50 border border-blue-100 rounded-lg text-sm text-blue-800">
-                  <span className="font-semibold">현재 업로드된 파일:</span><br/>
-                  {uploadedFiles[excelModalBrand]}
-                </div>
-              )}
-
-              <input 
-                type="file" 
-                accept=".xlsx, .xls"
-                className="hidden" 
-                ref={fileInputRef}
-                onChange={handleFileUpload}
-              />
-              <button 
-                onClick={() => fileInputRef.current?.click()}
-                className="w-full flex items-center justify-center gap-2 border-2 border-dashed border-gray-300 rounded-lg p-4 text-gray-600 hover:bg-gray-50 hover:border-blue-400 transition-colors"
-              >
-                <Upload size={20} />
-                <span>새로운 {excelModalBrand} 파일 선택</span>
-              </button>
-              <p className="text-xs text-gray-500 mt-2">업로드 시 '{excelModalBrand}' 기존 데이터만 새 파일로 덮어쓰기 됩니다.</p>
-            </div>
-            <div className="flex justify-end gap-2">
-              <button 
-                onClick={() => setIsSettingsOpen(false)} 
-                className="px-4 py-2 bg-gray-200 text-gray-800 hover:bg-gray-300 rounded-lg transition-colors font-medium"
-              >
-                닫기
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* 규칙 설정 모달 */}
       {isRuleSettingsOpen && (
@@ -564,12 +481,22 @@ export default function Dashboard() {
       )}
 
       {/* 메인 3단 분할 레이아웃 */}
-      <main className="flex flex-col md:flex-row flex-1 overflow-auto md:overflow-hidden">
+      <main className="flex min-h-0 flex-col md:flex-row flex-1 overflow-auto md:overflow-hidden">
         {/* 2. 좌측 조건 설정 패널 */}
         <aside className="w-full md:w-80 bg-white border-b md:border-r border-gray-200 md:overflow-y-auto p-4 flex flex-col gap-6 shrink-0">
           <h2 className="font-semibold text-lg text-gray-800 mb-2">조건 검색</h2>
           
           <div className="space-y-4">
+            <div>
+              <label className="block text-gray-600 mb-1">통합 검색</label>
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="회사, 상품명, 모델명 검색"
+                className="w-full border border-gray-300 rounded p-2 focus:border-blue-500 outline-none"
+              />
+            </div>
             <div>
               <label className="block text-gray-600 mb-1">1. 주문 유형</label>
               <div className="flex flex-wrap gap-2 mb-2">
@@ -631,40 +558,40 @@ export default function Dashboard() {
                 className="w-full border border-gray-300 rounded p-2 focus:border-blue-500 outline-none"
               >
                 {modelCodes.map(m => {
-                  const spec = currentBrandData.find(d => d.model_code === m)?.spec_detail;
+                  const spec = currentBrandProducts.find((product) => product.model === m)?.detailModel;
                   return <option key={m} value={m}>{m} {spec ? `(${spec})` : ''}</option>
                 })}
               </select>
             </div>
 
             <div>
-              <label className="block text-gray-600 mb-1">5. 관리/점검 방식</label>
+              <label className="block text-gray-600 mb-1">5. 의무/약정기간</label>
               <div className="flex flex-wrap gap-2">
-                {serviceTypes.map(s => (
+                {periods.map((period) => (
                   <button 
-                    key={s}
-                    onClick={() => setSelectedServiceType(s)}
-                    className={`flex-1 py-1.5 border rounded whitespace-nowrap px-2 ${selectedServiceType === s ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-300 bg-white text-gray-600'}`}
+                    key={period}
+                    onClick={() => setSelectedPeriod(period)}
+                    className={`flex-1 py-1.5 border rounded whitespace-nowrap px-2 ${selectedPeriod === period ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-300 bg-white text-gray-600'}`}
                   >
-                    {s}
+                    {formatPeriod(period)}
                   </button>
                 ))}
               </div>
             </div>
 
             <div>
-              <label className="block text-gray-600 mb-1">6. 의무 약정 기간</label>
-              <div className="flex flex-wrap gap-2">
-                {contractPeriods.map(c => (
-                  <button 
-                    key={c}
-                    onClick={() => setSelectedContractPeriod(c)}
-                    className={`flex-1 py-1.5 border rounded whitespace-nowrap px-2 ${selectedContractPeriod === c ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-300 bg-white text-gray-600'}`}
-                  >
-                    {c}
-                  </button>
+              <label className="block text-gray-600 mb-1">6. 렌탈 조건</label>
+              <select
+                value={selectedOptionId}
+                onChange={(event) => setSelectedOptionId(event.target.value)}
+                className="w-full border border-gray-300 rounded p-2 focus:border-blue-500 outline-none"
+              >
+                {periodOptions.map((option) => (
+                  <option key={option.optionId} value={option.optionId}>
+                    {getOptionConditionLabel(option)} · {option.monthlyPrice.toLocaleString()}원
+                  </option>
                 ))}
-              </div>
+              </select>
             </div>
 
             <div>
@@ -691,8 +618,14 @@ export default function Dashboard() {
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 md:p-6">
                 <div className="flex flex-col md:flex-row justify-between items-start mb-4 gap-2">
                   <div>
-                    <h2 className="text-xl md:text-2xl font-bold text-gray-800 mb-1">{computedFinalData.product_name}</h2>
-                    <p className="text-sm md:text-base text-gray-500">{computedFinalData.model_code} {computedFinalData.spec_detail && `(${computedFinalData.spec_detail})`} / {computedFinalData.contract_period} / {computedFinalData.service_type}</p>
+                    <h2 className="text-xl md:text-2xl font-bold text-gray-800 mb-1">{computedFinalData.product?.productName}</h2>
+                    <p className="text-sm md:text-base text-gray-500">
+                      {computedFinalData.product?.company} / {computedFinalData.product?.category} / {computedFinalData.product?.model}
+                      {computedFinalData.product?.detailModel && ` (${computedFinalData.product.detailModel})`}
+                    </p>
+                    <p className="text-sm text-gray-500 mt-1">
+                      의무 {formatPeriod(computedFinalData.mandatoryPeriod)} · 약정 {formatPeriod(computedFinalData.contractPeriod)} · {getOptionConditionLabel(computedFinalData)}
+                    </p>
                   </div>
                   {orderType !== "신규" && (
                     <span className="bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-sm font-bold shrink-0">
@@ -703,17 +636,19 @@ export default function Dashboard() {
                 
                 <div className="space-y-4 mb-6">
                   <div className="flex justify-between items-center text-gray-500">
-                    <span>정상 렌탈료</span>
-                    <span className="line-through">{computedFinalData.base_price?.toLocaleString() || 0}원</span>
+                    <span>월 렌탈료</span>
+                    <span>{computedFinalData.monthlyPrice.toLocaleString()}원</span>
                   </div>
                   <div className="flex justify-between items-center font-semibold text-lg text-gray-800">
                     <span>최종 적용가</span>
                     <span className="text-blue-600 text-xl">{computedFinalData.computedPrice?.toLocaleString() || 0}원</span>
                   </div>
-                  {computedFinalData.half_price_period && computedFinalData.half_price_period !== "-" && (
+                  {computedFinalData.promotionName && (
                     <div className="flex justify-between items-center text-sm mt-1">
-                      <span className="text-pink-600 font-medium">✨ 반값할인 적용기간</span>
-                      <span className="text-pink-600 font-bold bg-pink-50 px-2 py-0.5 rounded">{computedFinalData.half_price_period}</span>
+                      <span className="text-pink-600 font-medium">프로모션</span>
+                      <span className="text-pink-600 font-bold bg-pink-50 px-2 py-0.5 rounded">
+                        {computedFinalData.promotionName}{computedFinalData.promotionPeriod ? ` · ${computedFinalData.promotionPeriod}개월` : ""}
+                      </span>
                     </div>
                   )}
                 </div>
@@ -730,8 +665,10 @@ export default function Dashboard() {
                 <div className="bg-gray-50 rounded-lg p-4 border border-gray-100">
                   <h3 className="font-semibold text-gray-700 mb-2">🎁 본사 실시간 지원 혜택</h3>
                   <ul className="list-disc pl-5 text-gray-600 space-y-1">
-                    {computedFinalData.half_price_period && computedFinalData.half_price_period !== "-" && (
-                      <li className="text-pink-600 font-medium">반값 프로모션 지원: {computedFinalData.half_price_period}</li>
+                    {computedFinalData.promotionName && (
+                      <li className="text-pink-600 font-medium">
+                        {computedFinalData.promotionName}{computedFinalData.promotionDescription ? `: ${computedFinalData.promotionDescription}` : ""}
+                      </li>
                     )}
                     {extraBenefit && (
                       <li className="text-blue-600 font-medium">추가 지원: 렌탈료 {extraBenefit}</li>
@@ -740,7 +677,7 @@ export default function Dashboard() {
                     {giftDeduction > 0 && (
                       <li className="font-bold text-blue-700">최대 사은품(상품권) {giftDeduction / 10000}만원 지원</li>
                     )}
-                    {computedFinalData.benefit_notes && computedFinalData.benefit_notes.split(',').map((n: string, i: number) => (
+                    {computedFinalData.notes && computedFinalData.notes.split(',').map((n: string, i: number) => (
                       <li key={i}>{n.trim()}</li>
                     ))}
                   </ul>
@@ -783,44 +720,13 @@ export default function Dashboard() {
                       </div>
                     </div>
 
-                    {computedFinalData.other_compensation && (
-                      <div className="bg-gray-50 p-3 rounded-lg border border-gray-200 flex flex-col justify-between">
-                        <div>
-                          <div className="text-xs text-gray-500 mb-1">타사보상 혜택 적용시</div>
-                          <div className="flex justify-between text-sm text-gray-600">
-                            <span>타사보상 수수료</span>
-                            <span>{Number(computedFinalData.other_compensation).toLocaleString()}원</span>
-                          </div>
-                        </div>
-                        <div className="flex justify-between font-bold text-green-600 mt-2 pt-2 border-t border-gray-200">
-                          <span>순마진 (Net)</span>
-                          <span>{(Number(computedFinalData.other_compensation) - giftDeduction).toLocaleString()}원</span>
-                        </div>
-                      </div>
-                    )}
-
-                    {computedFinalData.half_price_compensation && (
-                      <div className="bg-gray-50 p-3 rounded-lg border border-gray-200 flex flex-col justify-between">
-                        <div>
-                          <div className="text-xs text-gray-500 mb-1">반값할인 혜택 적용시</div>
-                          <div className="flex justify-between text-sm text-gray-600">
-                            <span>반값할인 수수료</span>
-                            <span>{Number(computedFinalData.half_price_compensation).toLocaleString()}원</span>
-                          </div>
-                        </div>
-                        <div className="flex justify-between font-bold text-green-600 mt-2 pt-2 border-t border-gray-200">
-                          <span>순마진 (Net)</span>
-                          <span>{(Number(computedFinalData.half_price_compensation) - giftDeduction).toLocaleString()}원</span>
-                        </div>
-                      </div>
-                    )}
                   </div>
                 </div>
               </div>
             </>
           ) : (
             <div className="flex-1 flex items-center justify-center text-gray-500 bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center min-h-[300px]">
-              {rentalData.length === 0 ? "우측 상단 ⚙️설정에서 엑셀 데이터를 업로드해주세요." : "선택된 조건에 맞는 데이터가 없습니다."}
+              {productsData.length === 0 ? "통합 렌탈 데이터를 불러오지 못했습니다." : "선택된 조건에 맞는 데이터가 없습니다."}
             </div>
           )}
         </section>
@@ -849,15 +755,15 @@ export default function Dashboard() {
       </main>
 
       {/* 5. 하단 매트릭스 표 */}
-      <footer className="h-auto max-h-[40vh] md:h-48 bg-white border-t border-gray-200 p-4 overflow-y-auto shrink-0">
+      <footer className="h-auto max-h-[45vh] md:h-[34vh] md:min-h-64 md:max-h-[26rem] bg-white border-t border-gray-200 p-4 overflow-y-auto shrink-0">
         <h3 className="font-semibold text-gray-800 mb-2">📊 1초 즉답 단가 비교표 {selectedModelCode && `(${selectedModelCode})`}</h3>
         {matrixData.rows.length > 0 ? (
           <table className="w-full text-center border-collapse">
-            <thead>
+            <thead className="sticky top-0 z-10">
               <tr className="bg-gray-100 text-gray-600">
-                <th className="border border-gray-200 py-1.5 font-medium">관리방식 \ 약정기간</th>
+                <th className="border border-gray-200 py-1.5 font-medium">렌탈 조건 \ 선택기간</th>
                 {matrixData.cols.map(c => (
-                  <th key={c} className="border border-gray-200 py-1.5 font-medium">{c}</th>
+                  <th key={c} className="border border-gray-200 py-1.5 font-medium">{formatPeriod(c)}</th>
                 ))}
               </tr>
             </thead>
@@ -866,11 +772,12 @@ export default function Dashboard() {
                 <tr key={r}>
                   <td className="border border-gray-200 py-1.5 bg-gray-50 font-medium">{r}</td>
                   {matrixData.cols.map(c => {
-                    const match = matrixData.data.find(d => d.service_type === r && d.contract_period === c);
-                    const isSelected = r === selectedServiceType && c === selectedContractPeriod;
+                    const matches = matrixData.data.filter((option) => getOptionConditionLabel(option) === r && getOptionPeriod(option) === c);
+                    const match = matches.find((option) => option.optionId === selectedOptionId) ?? matches[0];
+                    const isSelected = match?.optionId === selectedOptionId;
                     return (
                       <td key={c} className={`border border-gray-200 py-1.5 ${isSelected ? 'font-bold text-blue-600 bg-blue-50' : ''}`}>
-                        {match ? `${match.promo_price?.toLocaleString()}원` : '-'}
+                        {match ? `${match.monthlyPrice.toLocaleString()}원` : '-'}
                       </td>
                     );
                   })}

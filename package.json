@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "build:rental-data": "node scripts/build-rental-data.mjs",
+    "prebuild": "npm run build:rental-data",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

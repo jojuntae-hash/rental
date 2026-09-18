@@ -1,0 +1,29 @@
+{
+  "generatedAt": "2026-09-18T14:16:46.181Z",
+  "baseMonths": [
+    "2026-09"
+  ],
+  "productCount": 585,
+  "optionCount": 5651,
+  "sourceFiles": {
+    "쿠쿠": {
+      "fileName": "쿠쿠_통합양식.xlsx",
+      "productCount": 183,
+      "optionCount": 2593
+    },
+    "코웨이": {
+      "fileName": "코웨이_통합양식.xlsx",
+      "productCount": 348,
+      "optionCount": 2330
+    },
+    "SK매직": {
+      "fileName": "SK매직_통합양식.xlsx",
+      "productCount": 54,
+      "optionCount": 728
+    }
+  },
+  "validation": {
+    "errors": [],
+    "warnings": []
+  }
+}
